@@ -1,8 +1,58 @@
 # local-ai-acp
 
-ACP ([Agent Client Protocol](https://agentclientprotocol.com)) adapter for **local AI** — bridges any OpenAI-compatible API to ACP-compliant harnesses like [openab](https://github.com/openabdev/openab), Zed, and others.
+ACP ([Agent Client Protocol](https://agentclientprotocol.com)) adapter for **local AI** — bridges any OpenAI-compatible API to ACP-compliant harnesses like [openab](https://github.com/openabdev/openab), Zed, and JetBrains IDEs.
 
-Written in Rust. No runtime dependencies. Single binary.
+Written in Rust. Single ~5MB binary. Zero runtime dependencies. Fully offline.
+
+## Why
+
+- **Zero API cost** — all inference runs on your hardware
+- **Data never leaves your network** — code, prompts, responses stay local
+- **One binary, any backend** — Ollama, vLLM, LocalAI, llama.cpp, LM Studio, and more
+- **Enterprise-ready** — structured logging, retry with backoff, graceful shutdown, configurable history limits
+
+## Architecture
+
+```
+                          local-ai-acp
+                     ┌─────────────────────┐
+                     │  JSON-RPC 2.0       │
+ACP Harness          │  ┌───────────────┐  │         Local AI Server
+(openab, Zed,   ────stdin──▶ ACP Router │  │         (OpenAI-compatible)
+ JetBrains)          │  └──────┬────────┘  │
+                     │         │           │
+              ◀──stdout───  Notify/       │
+              (streaming)   Response       │
+                     │         │           │
+                     │  ┌──────▼────────┐  │
+                     │  │  LLM Client   │──── HTTP/SSE ──▶  /v1/chat/completions
+                     │  │  - retry      │  │
+                     │  │  - backoff    │  │         ┌─────────────────┐
+                     │  │  - streaming  │  │         │ Ollama / vLLM / │
+                     │  └───────────────┘  │         │ LocalAI / ...   │
+                     │                     │         └─────────────────┘
+                     │  ┌───────────────┐  │
+                     │  │ Session Store  │  │
+                     │  │ - history     │  │
+                     │  │ - auto-trim   │  │
+                     │  └───────────────┘  │
+                     └─────────────────────┘
+```
+
+### Data flow
+
+1. Harness sends JSON-RPC request via **stdin**
+2. local-ai-acp translates to OpenAI chat completion API call
+3. LLM response streams back as SSE chunks
+4. Chunks are emitted as ACP `agent_message_chunk` notifications via **stdout**
+5. Conversation history is kept per session, auto-trimmed to prevent memory growth
+
+### Key design decisions
+
+- **stdin/stdout transport** — spawned as a child process by the harness, no ports to manage
+- **Stateless binary** — no database, no disk writes, all state in memory
+- **Retry with exponential backoff** — survives LLM server restarts (Ollama, vLLM rolling updates)
+- **Structured logging** — `tracing` with `RUST_LOG` support, writes to stderr (not mixed with JSON-RPC on stdout)
 
 ## Supported backends
 
@@ -21,6 +71,8 @@ Any service exposing `/v1/chat/completions` with SSE streaming:
 
 ## Quick start
 
+### From source
+
 ```bash
 # Build
 cargo build --release
@@ -28,15 +80,65 @@ cargo build --release
 # Run with Ollama (default)
 ./target/release/local-ai-acp
 
-# Run with LocalAI
-LLM_BASE_URL=http://localhost:8080/v1 LLM_MODEL=gpt-3.5-turbo ./target/release/local-ai-acp
-
 # Run with vLLM
 LLM_BASE_URL=http://localhost:8000/v1 LLM_MODEL=meta-llama/Llama-3-8b ./target/release/local-ai-acp
 
-# Run with LM Studio
-LLM_BASE_URL=http://localhost:1234/v1 LLM_MODEL=loaded-model ./target/release/local-ai-acp
+# Run with config file
+./target/release/local-ai-acp config.toml
 ```
+
+### With Docker
+
+```bash
+# Build image
+docker build -t local-ai-acp .
+
+# Run (connect to host's Ollama)
+docker run --network=host local-ai-acp
+
+# Run with custom model
+docker run --network=host -e LLM_MODEL=llama3.2:7b local-ai-acp
+```
+
+### Install from Git
+
+```bash
+cargo install --git https://github.com/BlakeHung/local-ai-acp
+```
+
+## Configuration
+
+local-ai-acp supports three configuration methods (highest priority wins):
+
+1. **Environment variables** — best when spawned by openab
+2. **TOML config file** — best for standalone deployment
+3. **Built-in defaults** — works out of the box with Ollama
+
+### Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_BASE_URL` | `http://localhost:11434/v1` | OpenAI-compatible endpoint |
+| `LLM_MODEL` | `gemma4:26b` | Model name |
+| `LLM_API_KEY` | `local-ai` | API key (most local services ignore this) |
+| `LLM_SYSTEM_PROMPT` | (auto-generated) | Custom system prompt |
+| `LLM_TEMPERATURE` | (model default) | Sampling temperature (0.0-2.0) |
+| `LLM_MAX_TOKENS` | (model default) | Maximum tokens to generate |
+| `LLM_TIMEOUT` | `300` | HTTP request timeout in seconds |
+| `LLM_MAX_HISTORY_TURNS` | `50` | Max conversation turns to keep (0 = unlimited) |
+| `RUST_LOG` | `local_ai_acp=info` | Log level (`debug`, `info`, `warn`, `error`) |
+
+Also supports `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_API_KEY` as aliases.
+
+### Config file
+
+```bash
+cp config.toml.example config.toml
+# Edit as needed
+./local-ai-acp config.toml
+```
+
+See [config.toml.example](config.toml.example) for all options.
 
 ## Mac quick start (Apple Silicon)
 
@@ -45,21 +147,16 @@ Mac with Apple Silicon is ideal for local AI — unified memory means your entir
 ```bash
 # 1. Install Ollama
 brew install ollama
-ollama serve  # start in background
+ollama serve
 
-# 2. Pull a model (pick one based on your RAM)
-ollama pull gemma4:26b      # 16GB+ RAM (MacBook Pro M3/M4)
-ollama pull qwen2.5:32b     # 48GB+ RAM (MacBook Pro M4 Pro)
-ollama pull llama3.2:7b     # 8GB+ RAM  (MacBook Air M2/M3)
+# 2. Pull a model
+ollama pull gemma4:26b
 
 # 3. Install local-ai-acp
 cargo install --git https://github.com/BlakeHung/local-ai-acp
 
-# 4. Use with Zed editor (native ACP support on Mac)
+# 4. Use with Zed editor (native ACP support)
 #    Zed Settings > Agent > command = "local-ai-acp"
-
-# Or use with openab (Discord bot)
-#    config.toml: command = "local-ai-acp"
 ```
 
 **Model recommendations by Mac:**
@@ -76,21 +173,9 @@ cargo install --git https://github.com/BlakeHung/local-ai-acp
 [openab](https://github.com/openabdev/openab) is a Discord-to-ACP bridge. Combined with local-ai-acp, anyone in your Discord server can use your local AI — zero API keys, zero cost.
 
 ```
-Discord user                    Your machine
-     │                               │
-     │  @bot help me review           │
-     │  this PR                       │
-     v                                v
-  Discord  ──WebSocket──▶  openab (Rust)
-                              │
-                              │ ACP (stdin/stdout)
-                              v
-                         local-ai-acp (Rust)
-                              │
-                              │ HTTP
-                              v
-                         Ollama + GPU
-                         gemma4:26b
+Team member A ──┐
+Team member B ──┤── Discord ──▶ openab ──▶ local-ai-acp ──▶ Ollama + GPU
+Team member C ──┘                          (your machine)
 ```
 
 ### Setup
@@ -102,7 +187,6 @@ ollama pull gemma4:26b
 
 # 2. Build local-ai-acp
 cd local-ai-acp && cargo build --release
-# copy binary to PATH
 cp target/release/local-ai-acp /usr/local/bin/
 
 # 3. Configure openab
@@ -127,94 +211,61 @@ export DISCORD_BOT_TOKEN="your-token"
 cargo run -- config.toml
 ```
 
-Now anyone in your Discord server can `@bot` and get AI responses powered by your local GPU.
-
 ### Multi-bot setup
 
-Run multiple Discord bots with different models — each bot is a separate openab instance:
+Run multiple Discord bots with different models:
 
 ```toml
 # config-coder.toml — fast coding model
-[discord]
-bot_token = "${BOT_TOKEN_CODER}"
-allowed_channels = ["your-channel-id"]
-
 [agent]
 command = "local-ai-acp"
-env = { LLM_BASE_URL = "http://localhost:11434/v1", LLM_MODEL = "qwen2.5:32b" }
+env = { LLM_MODEL = "qwen2.5:32b" }
 
 # config-reviewer.toml — analytical model
-[discord]
-bot_token = "${BOT_TOKEN_REVIEWER}"
-allowed_channels = ["your-channel-id"]
-
 [agent]
 command = "local-ai-acp"
-env = { LLM_BASE_URL = "http://localhost:11434/v1", LLM_MODEL = "gemma4:26b" }
-```
-
-```bash
-# Run both
-openab config-coder.toml &
-openab config-reviewer.toml &
-```
-
-### Team GPU sharing via Discord
-
-One GPU server can serve your entire team:
-
-```
-Team member A (no GPU) ──┐
-Team member B (no GPU) ──┤── Discord ──▶ openab ──▶ local-ai-acp ──▶ Ollama + GPU
-Team member C (no GPU) ──┘                         (your machine)
-```
-
-No one needs to install anything — just join the Discord server and `@bot`.
-
-## Environment variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LLM_BASE_URL` | `http://localhost:11434/v1` | OpenAI-compatible endpoint |
-| `LLM_MODEL` | `gemma4:26b` | Model name |
-| `LLM_API_KEY` | `local-ai` | API key (most local services ignore this) |
-| `LLM_SYSTEM_PROMPT` | (auto-generated) | Custom system prompt |
-
-Also supports `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_API_KEY` as aliases.
-
-## Install
-
-```bash
-# From source
-cargo install --git https://github.com/BlakeHung/local-ai-acp
-
-# Or build locally
-git clone https://github.com/BlakeHung/local-ai-acp
-cd local-ai-acp
-cargo build --release
+env = { LLM_MODEL = "gemma4:26b" }
 ```
 
 ## ACP protocol support
 
 | Method | Status |
 |--------|--------|
-| `initialize` | ✅ Supported |
-| `session/new` | ✅ Multi-session with conversation history |
-| `session/prompt` | ✅ Streaming via SSE |
+| `initialize` | Supported |
+| `session/new` | Multi-session with conversation history |
+| `session/prompt` | Streaming via SSE |
+| `session/end` | Session cleanup |
 
 | Notification | Status |
 |--------------|--------|
-| `agent_message_chunk` | ✅ Streaming text chunks |
-| `agent_thought_chunk` | ✅ Emitted on prompt start |
-| `tool_call` | ✅ LLM call tracking |
-| `tool_call_update` | ✅ Completion status |
+| `agent_message_chunk` | Streaming text chunks |
+| `agent_thought_chunk` | Emitted on prompt start |
+| `tool_call` | LLM call tracking |
+| `tool_call_update` | Completion status |
 
-## Architecture
+## Observability
 
+Logs are written to **stderr** in structured format via `tracing`. Control verbosity with `RUST_LOG`:
+
+```bash
+# Default (info)
+./local-ai-acp
+
+# Debug mode — see all requests, retries, history trimming
+RUST_LOG=local_ai_acp=debug ./local-ai-acp
+
+# Quiet mode — errors only
+RUST_LOG=local_ai_acp=error ./local-ai-acp
 ```
-ACP Harness ──stdin/stdout──▶ local-ai-acp ──HTTP──▶ Local AI Server
-(openab, Zed)  (JSON-RPC 2.0)   (Rust)       (SSE)   (OpenAI-compatible)
-```
+
+When spawned by openab, logs go to the child process's stderr. To capture them, configure openab to pipe stderr (see openab docs).
+
+## Reliability
+
+- **Retry with exponential backoff** — transient errors (408, 429, 500, 502, 503, 504) and connection timeouts are retried up to 3 times with exponential backoff (500ms, 1s, 2s)
+- **Graceful shutdown** — handles SIGINT/SIGTERM and stdin EOF cleanly, drains in-flight requests
+- **Memory-bounded sessions** — conversation history auto-trims to `LLM_MAX_HISTORY_TURNS` (default 50 turns), preventing OOM in long sessions
+- **Poison recovery** — RwLock poisoning is handled gracefully instead of panicking
 
 ## License
 

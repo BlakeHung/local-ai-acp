@@ -1,0 +1,29 @@
+# local-ai-acp configuration
+# All values can be overridden by environment variables.
+# When spawned by openab, env vars are sufficient — this file is optional.
+
+[llm]
+# OpenAI-compatible endpoint
+base_url = "http://localhost:11434/v1"
+
+# Model name
+model = "gemma4:26b"
+
+# API key (most local services ignore this)
+# api_key = "local-ai"
+
+# Custom system prompt (auto-generated if not set)
+# system_prompt = "You are a helpful coding assistant."
+
+# Sampling temperature (0.0 - 2.0)
+# temperature = 0.7
+
+# Maximum tokens to generate
+# max_tokens = 4096
+
+# HTTP timeout in seconds
+timeout_secs = 300
+
+# Max conversation turns to keep (0 = unlimited)
+# Prevents memory growth in long sessions
+max_history_turns = 50
