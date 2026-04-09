@@ -1,4 +1,4 @@
-# acp-bridge
+# ACP-Bridge
 
 ACP ([Agent Client Protocol](https://agentclientprotocol.com)) adapter for **local AI** — bridges any OpenAI-compatible API to ACP-compliant harnesses like [openab](https://github.com/openabdev/openab), Zed, and JetBrains IDEs.
 
