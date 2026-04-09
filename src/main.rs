@@ -80,7 +80,9 @@ async fn handle_session_prompt(id: u64, params: &Value, config: &llm::LlmConfig)
     let session_id = match params.get("sessionId").and_then(|v| v.as_str()) {
         Some(s) => s.to_string(),
         None => {
-            let err = AcpError::MissingParam { field: "sessionId".into() };
+            let err = AcpError::MissingParam {
+                field: "sessionId".into(),
+            };
             acp::send_error(id, err.code(), &err.to_string());
             return;
         }
@@ -102,17 +104,24 @@ async fn handle_session_prompt(id: u64, params: &Value, config: &llm::LlmConfig)
     {
         let mut sessions = match SESSIONS.write() {
             Ok(s) => s,
-            Err(p) => { warn!("Session lock poisoned, recovering"); p.into_inner() }
+            Err(p) => {
+                warn!("Session lock poisoned, recovering");
+                p.into_inner()
+            }
         };
         let session = match sessions.get_mut(&session_id) {
             Some(s) => s,
             None => {
-                let err = AcpError::UnknownSession { session_id: session_id.clone() };
+                let err = AcpError::UnknownSession {
+                    session_id: session_id.clone(),
+                };
                 acp::send_error(id, err.code(), &err.to_string());
                 return;
             }
         };
-        session.messages.push(json!({"role": "user", "content": user_text}));
+        session
+            .messages
+            .push(json!({"role": "user", "content": user_text}));
 
         // Trim to max_history_turns if configured
         if config.max_history_turns > 0 {
@@ -131,9 +140,15 @@ async fn handle_session_prompt(id: u64, params: &Value, config: &llm::LlmConfig)
     let messages = {
         let sessions = match SESSIONS.read() {
             Ok(s) => s,
-            Err(p) => { warn!("Session lock poisoned, recovering"); p.into_inner() }
+            Err(p) => {
+                warn!("Session lock poisoned, recovering");
+                p.into_inner()
+            }
         };
-        sessions.get(&session_id).map(|s| s.messages.clone()).unwrap_or_default()
+        sessions
+            .get(&session_id)
+            .map(|s| s.messages.clone())
+            .unwrap_or_default()
     };
 
     let mut full_response = String::new();
@@ -167,10 +182,15 @@ async fn handle_session_prompt(id: u64, params: &Value, config: &llm::LlmConfig)
     if !full_response.is_empty() {
         let mut sessions = match SESSIONS.write() {
             Ok(s) => s,
-            Err(p) => { warn!("Session lock poisoned, recovering"); p.into_inner() }
+            Err(p) => {
+                warn!("Session lock poisoned, recovering");
+                p.into_inner()
+            }
         };
         if let Some(session) = sessions.get_mut(&session_id) {
-            session.messages.push(json!({"role": "assistant", "content": full_response}));
+            session
+                .messages
+                .push(json!({"role": "assistant", "content": full_response}));
         }
     }
 
@@ -182,7 +202,9 @@ fn handle_session_end(id: u64, params: &Value) {
     let session_id = match params.get("sessionId").and_then(|v| v.as_str()) {
         Some(s) => s.to_string(),
         None => {
-            let err = AcpError::MissingParam { field: "sessionId".into() };
+            let err = AcpError::MissingParam {
+                field: "sessionId".into(),
+            };
             acp::send_error(id, err.code(), &err.to_string());
             return;
         }
@@ -190,7 +212,10 @@ fn handle_session_end(id: u64, params: &Value) {
 
     let removed = match SESSIONS.write() {
         Ok(mut s) => s.remove(&session_id).is_some(),
-        Err(p) => { warn!("Session lock poisoned, recovering"); p.into_inner().remove(&session_id).is_some() }
+        Err(p) => {
+            warn!("Session lock poisoned, recovering");
+            p.into_inner().remove(&session_id).is_some()
+        }
     };
 
     if removed {
@@ -305,8 +330,17 @@ async fn main() {
 
     // Cleanup: drop all sessions
     let session_count = match SESSIONS.write() {
-        Ok(mut s) => { let n = s.len(); s.clear(); n }
-        Err(p) => { let mut s = p.into_inner(); let n = s.len(); s.clear(); n }
+        Ok(mut s) => {
+            let n = s.len();
+            s.clear();
+            n
+        }
+        Err(p) => {
+            let mut s = p.into_inner();
+            let n = s.len();
+            s.clear();
+            n
+        }
     };
     if session_count > 0 {
         info!(sessions = session_count, "Cleaned up sessions on exit");

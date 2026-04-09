@@ -62,14 +62,17 @@ pub enum StreamChunk {
 
 /// Returns true if the HTTP status code is transient and worth retrying.
 fn is_retryable(status: reqwest::StatusCode) -> bool {
-    matches!(
-        status.as_u16(),
-        408 | 429 | 500 | 502 | 503 | 504
-    )
+    matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504)
 }
 
 /// Build the JSON body for a chat completion request.
-fn build_body(config: &LlmConfig, messages: &[Value], model: &str, stream: bool, tools: Option<&[Value]>) -> Value {
+fn build_body(
+    config: &LlmConfig,
+    messages: &[Value],
+    model: &str,
+    stream: bool,
+    tools: Option<&[Value]>,
+) -> Value {
     let mut body = json!({
         "model": model,
         "messages": messages,
@@ -121,11 +124,18 @@ pub async fn chat(
 
         match result {
             Ok(response) if response.status().is_success() => {
-                let val: Value = response.json().await.map_err(|e| format!("Failed to parse response: {e}"))?;
+                let val: Value = response
+                    .json()
+                    .await
+                    .map_err(|e| format!("Failed to parse response: {e}"))?;
                 return Ok(val);
             }
             Ok(response) if is_retryable(response.status()) => {
-                last_err = format!("LLM HTTP {}: {}", response.status(), response.status().canonical_reason().unwrap_or("error"));
+                last_err = format!(
+                    "LLM HTTP {}: {}",
+                    response.status(),
+                    response.status().canonical_reason().unwrap_or("error")
+                );
                 warn!(status = %response.status(), "Transient LLM error");
             }
             Ok(response) => {
@@ -133,7 +143,10 @@ pub async fn chat(
                 return Err(format!(
                     "LLM HTTP {}: {}",
                     response.status(),
-                    response.status().canonical_reason().unwrap_or("Unknown error")
+                    response
+                        .status()
+                        .canonical_reason()
+                        .unwrap_or("Unknown error")
                 ));
             }
             Err(e) if e.is_timeout() || e.is_connect() => {
@@ -188,7 +201,11 @@ pub async fn stream_chat(
                 break;
             }
             Ok(resp) if is_retryable(resp.status()) => {
-                last_err = format!("LLM HTTP {}: {}", resp.status(), resp.status().canonical_reason().unwrap_or("error"));
+                last_err = format!(
+                    "LLM HTTP {}: {}",
+                    resp.status(),
+                    resp.status().canonical_reason().unwrap_or("error")
+                );
                 warn!(status = %resp.status(), "Transient LLM error");
             }
             Ok(resp) => {

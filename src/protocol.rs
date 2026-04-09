@@ -48,10 +48,10 @@ impl AcpError {
     /// JSON-RPC error code for this variant.
     pub fn code(&self) -> i64 {
         match self {
-            AcpError::MissingParam { .. } => -32602,  // Invalid params
+            AcpError::MissingParam { .. } => -32602,   // Invalid params
             AcpError::UnknownSession { .. } => -32001, // Application error
             AcpError::MethodNotFound { .. } => -32601, // Method not found
-            AcpError::LlmError { .. } => -32003,      // Application error
+            AcpError::LlmError { .. } => -32003,       // Application error
         }
     }
 }

@@ -112,16 +112,24 @@ fn trim_history_large_conversation() {
 
 #[test]
 fn acp_error_codes() {
-    let missing = AcpError::MissingParam { field: "sessionId".into() };
+    let missing = AcpError::MissingParam {
+        field: "sessionId".into(),
+    };
     assert_eq!(missing.code(), -32602);
     assert!(missing.to_string().contains("sessionId"));
 
-    let unknown = AcpError::UnknownSession { session_id: "abc".into() };
+    let unknown = AcpError::UnknownSession {
+        session_id: "abc".into(),
+    };
     assert_eq!(unknown.code(), -32001);
 
-    let not_found = AcpError::MethodNotFound { method: "foo".into() };
+    let not_found = AcpError::MethodNotFound {
+        method: "foo".into(),
+    };
     assert_eq!(not_found.code(), -32601);
 
-    let llm = AcpError::LlmError { reason: "timeout".into() };
+    let llm = AcpError::LlmError {
+        reason: "timeout".into(),
+    };
     assert_eq!(llm.code(), -32003);
 }
