@@ -279,7 +279,10 @@ async fn main() {
             for m in &models {
                 info!("  - {m}");
             }
-            if !models.iter().any(|m| m.starts_with(&config.model) || config.model.starts_with(m.split(':').next().unwrap_or(""))) {
+            if !models.iter().any(|m| {
+                m.starts_with(&config.model)
+                    || config.model.starts_with(m.split(':').next().unwrap_or(""))
+            }) {
                 warn!(configured = %config.model, "Configured model not found in available models");
             }
         }

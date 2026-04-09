@@ -17,7 +17,10 @@ pub async fn probe_backend(config: &LlmConfig) -> Result<Vec<String>, String> {
         .map_err(|e| format!("HTTP client error: {e}"))?;
 
     // Try Ollama-native /api/tags first (works on localhost:11434)
-    let base = config.base_url.trim_end_matches("/v1").trim_end_matches('/');
+    let base = config
+        .base_url
+        .trim_end_matches("/v1")
+        .trim_end_matches('/');
     let tags_url = format!("{base}/api/tags");
 
     if let Ok(resp) = client.get(&tags_url).send().await {
