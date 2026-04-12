@@ -70,11 +70,8 @@ async fn mock_chat_completions(req: Request<Body>) -> impl IntoResponse {
             "data: [DONE]\n\n".to_string(),
         ];
 
-        let stream = futures_lite::stream::iter(
-            chunks
-                .into_iter()
-                .map(|chunk| Ok::<_, std::convert::Infallible>(chunk)),
-        );
+        let stream =
+            futures_lite::stream::iter(chunks.into_iter().map(Ok::<_, std::convert::Infallible>));
 
         axum::response::Response::builder()
             .header("content-type", "text/event-stream")
