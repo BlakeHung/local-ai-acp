@@ -108,10 +108,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download binary artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: acp-bridge-*
           merge-multiple: true
 
       - name: Extract version from tag
