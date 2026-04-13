@@ -9,6 +9,7 @@ Written in Rust. Single ~5MB binary. Zero runtime dependencies. Fully offline.
 - **Zero API cost** — all inference runs on your hardware
 - **Data never leaves your network** — code, prompts, responses stay local
 - **One binary, any backend** — Ollama, vLLM, LocalAI, llama.cpp, LM Studio, and more
+- **Ollama native integration** — auto-detects Ollama and uses native `/api/chat` with NDJSON streaming, model info query, and VRAM status check
 - **Enterprise-ready** — structured logging, retry with backoff, graceful shutdown, configurable history limits
 
 ## Architecture
@@ -56,11 +57,15 @@ ACP Harness          │  ┌───────────────┐  �
 
 ## Supported backends
 
-Any service exposing `/v1/chat/completions` with SSE streaming:
+Ollama is supported natively via `/api/chat` (NDJSON streaming). All other backends use the OpenAI-compatible `/v1/chat/completions` (SSE streaming). The backend type is auto-detected from the URL:
 
-| Backend | Default URL | Notes |
-|---------|------------|-------|
-| [Ollama](https://ollama.com) | `http://localhost:11434/v1` | Default |
+- URL **without** `/v1` suffix → Ollama native mode
+- URL **with** `/v1` suffix → OpenAI-compatible mode
+
+| Backend | Default URL | Mode |
+|---------|------------|------|
+| [Ollama](https://ollama.com) | `http://localhost:11434` | Native (recommended) |
+| [Ollama](https://ollama.com) | `http://localhost:11434/v1` | OpenAI compat (also works) |
 | [LocalAI](https://localai.io) | `http://localhost:8080/v1` | Drop-in OpenAI replacement |
 | [vLLM](https://docs.vllm.ai) | `http://localhost:8000/v1` | High-performance inference |
 | [llama.cpp server](https://github.com/ggml-org/llama.cpp) | `http://localhost:8080/v1` | Lightweight |
