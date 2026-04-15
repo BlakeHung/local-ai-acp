@@ -12,13 +12,18 @@ use acp_bridge::acp;
 use acp_bridge::config::ConfigFile;
 use acp_bridge::llm;
 use acp_bridge::protocol::{AcpError, JsonRpcRequest, Session};
+use acp_bridge::tools;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::RwLock;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+
+/// Maximum number of tool call rounds to prevent infinite loops.
+const MAX_TOOL_ROUNDS: usize = 5;
 
 // ---------------------------------------------------------------------------
 // Global state
@@ -111,7 +116,10 @@ fn handle_session_new(id: u64, params: &Value, config: &llm::LlmConfig) {
         format!("You are a helpful coding assistant. The user's working directory is: {cwd}")
     });
 
-    let session = Session::new(json!({"role": "system", "content": system_prompt}));
+    let session = Session::new(
+        json!({"role": "system", "content": system_prompt}),
+        PathBuf::from(&cwd),
+    );
     sessions_write().insert(session_id.clone(), session);
 
     info!(session_id = %session_id, max_history = config.max_history_turns, "New session");
@@ -173,55 +181,159 @@ async fn handle_session_prompt(id: u64, params: &Value, config: &llm::LlmConfig)
     acp::notify_thinking();
     acp::notify_tool_start("llm_chat");
 
-    let messages = {
-        let sessions = sessions_read();
-        sessions
-            .get(&session_id)
-            .map(|s| s.messages.clone())
-            .unwrap_or_default()
-    };
-
-    let mut full_response = String::new();
     let mut had_error = false;
+    let tool_defs = tools::tool_definitions();
 
-    match llm::stream_chat(config, &messages, None).await {
-        Ok(mut rx) => {
-            while let Some(chunk) = rx.recv().await {
-                match chunk {
-                    llm::StreamChunk::Content(text) => {
+    // Tool call loop: LLM may request tools, we execute and feed results back
+    for round in 0..MAX_TOOL_ROUNDS {
+        let messages = {
+            let sessions = sessions_read();
+            sessions
+                .get(&session_id)
+                .map(|s| s.messages.clone())
+                .unwrap_or_default()
+        };
+
+        let working_dir = {
+            let sessions = sessions_read();
+            sessions
+                .get(&session_id)
+                .map(|s| s.working_dir.clone())
+                .unwrap_or_default()
+        };
+
+        // Try non-streaming first to check for tool calls
+        let chat_result = llm::chat(config, &messages, None, Some(&tool_defs)).await;
+
+        match chat_result {
+            Ok(response) => {
+                // Check for tool calls in response
+                let tool_calls = extract_tool_calls(&response);
+
+                if tool_calls.is_empty() {
+                    // No tool calls — extract text and stream it
+                    let text = extract_response_text(&response);
+                    if !text.is_empty() {
                         acp::notify_text(&text);
-                        full_response.push_str(&text);
+                        let mut sessions = sessions_write();
+                        if let Some(session) = sessions.get_mut(&session_id) {
+                            session
+                                .messages
+                                .push(json!({"role": "assistant", "content": text}));
+                        }
                     }
-                    llm::StreamChunk::Error(err) => {
-                        error!(error = %err, "Stream error from LLM");
-                        acp::notify_text(&format!("\n\n**Error:** {err}\n"));
-                        had_error = true;
-                        break;
-                    }
-                    llm::StreamChunk::Done => break,
+                    break;
                 }
-            }
-        }
-        Err(e) => {
-            let err = AcpError::LlmError { reason: e };
-            error!(error = %err, "LLM communication failed");
-            acp::notify_text(&format!("\n\n**Error:** {err}\n"));
-            had_error = true;
-        }
-    }
 
-    if !full_response.is_empty() {
-        let mut sessions = sessions_write();
-        if let Some(session) = sessions.get_mut(&session_id) {
-            session
-                .messages
-                .push(json!({"role": "assistant", "content": full_response}));
+                // Has tool calls — execute them
+                info!(round, count = tool_calls.len(), "Executing tool calls");
+
+                // Add assistant message with tool_calls to history
+                {
+                    let mut sessions = sessions_write();
+                    if let Some(session) = sessions.get_mut(&session_id) {
+                        let assistant_msg = if config.is_ollama_native() {
+                            json!({"role": "assistant", "content": "", "tool_calls": tool_calls})
+                        } else {
+                            // OpenAI format
+                            response["choices"][0]["message"].clone()
+                        };
+                        session.messages.push(assistant_msg);
+                    }
+                }
+
+                for tc in &tool_calls {
+                    let func = &tc["function"];
+                    let name = func["name"].as_str().unwrap_or("unknown");
+                    let args_str = func["arguments"].as_str().unwrap_or("{}");
+                    let args: Value = serde_json::from_str(args_str)
+                        .unwrap_or_else(|_| func["arguments"].clone());
+
+                    acp::notify_tool_start(name);
+                    let result = tools::execute_tool(&working_dir, name, &args);
+                    acp::notify_tool_done(name, "completed");
+
+                    debug!(tool = name, result_len = result.len(), "Tool executed");
+
+                    // Add tool result to history
+                    {
+                        let mut sessions = sessions_write();
+                        if let Some(session) = sessions.get_mut(&session_id) {
+                            session.messages.push(json!({
+                                "role": "tool",
+                                "content": result
+                            }));
+                        }
+                    }
+                }
+
+                // Continue loop — LLM will see tool results and respond
+            }
+            Err(e) => {
+                let err = AcpError::LlmError { reason: e };
+                error!(error = %err, "LLM communication failed");
+                acp::notify_text(&format!("\n\n**Error:** {err}\n"));
+                had_error = true;
+                break;
+            }
         }
     }
 
     let status = if had_error { "failed" } else { "completed" };
     acp::notify_tool_done("llm_chat", status);
     acp::send_response(id, json!({"status": status}));
+}
+
+/// Extract tool calls from an LLM response (supports both Ollama and OpenAI format).
+fn extract_tool_calls(response: &Value) -> Vec<Value> {
+    // Ollama native: response.message.tool_calls
+    if let Some(calls) = response
+        .get("message")
+        .and_then(|m| m.get("tool_calls"))
+        .and_then(|tc| tc.as_array())
+    {
+        return calls.clone();
+    }
+
+    // OpenAI compat: response.choices[0].message.tool_calls
+    if let Some(calls) = response
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("tool_calls"))
+        .and_then(|tc| tc.as_array())
+    {
+        return calls.clone();
+    }
+
+    vec![]
+}
+
+/// Extract text content from an LLM response (supports both formats).
+fn extract_response_text(response: &Value) -> String {
+    // Ollama native: response.message.content
+    if let Some(text) = response
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+    {
+        if !text.is_empty() {
+            return text.to_string();
+        }
+    }
+
+    // OpenAI compat: response.choices[0].message.content
+    if let Some(text) = response
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+    {
+        return text.to_string();
+    }
+
+    String::new()
 }
 
 fn handle_session_end(id: u64, params: &Value) {

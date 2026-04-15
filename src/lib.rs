@@ -9,3 +9,4 @@ pub mod acp;
 pub mod config;
 pub mod llm;
 pub mod protocol;
+pub mod tools;

@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde_json::Value;
+use std::path::PathBuf;
 use std::time::Instant;
 
 #[derive(Debug, Deserialize)]
@@ -13,13 +14,16 @@ pub struct Session {
     pub messages: Vec<Value>,
     /// Last activity timestamp for idle timeout.
     pub last_active: Instant,
+    /// Working directory for this session (used for tool sandboxing).
+    pub working_dir: PathBuf,
 }
 
 impl Session {
-    pub fn new(system_message: Value) -> Self {
+    pub fn new(system_message: Value, working_dir: PathBuf) -> Self {
         Self {
             messages: vec![system_message],
             last_active: Instant::now(),
+            working_dir,
         }
     }
 

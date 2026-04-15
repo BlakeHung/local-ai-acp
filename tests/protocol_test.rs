@@ -37,7 +37,7 @@ fn parse_session_prompt_request() {
 // ---------------------------------------------------------------------------
 
 fn make_session(messages: Vec<serde_json::Value>) -> Session {
-    let mut session = Session::new(messages[0].clone());
+    let mut session = Session::new(messages[0].clone(), std::path::PathBuf::from("/tmp"));
     for msg in &messages[1..] {
         session.messages.push(msg.clone());
     }
@@ -114,7 +114,10 @@ fn trim_history_large_conversation() {
 
 #[test]
 fn session_touch_updates_last_active() {
-    let session = Session::new(json!({"role": "system", "content": "sys"}));
+    let session = Session::new(
+        json!({"role": "system", "content": "sys"}),
+        std::path::PathBuf::from("/tmp"),
+    );
     let first = session.last_active;
     std::thread::sleep(std::time::Duration::from_millis(10));
     let mut session = session;
